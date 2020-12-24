@@ -12,34 +12,43 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/*FreeRTOS kernel dependencies */
 #include "FreeRTOS.h"
 #include "task.h"
 #include "timers.h"
-#include "bsp.h"
-#include "nordic_common.h"
+/* nRF dependencies */
+#include "pca10059.h"
+#include "nrf_gpio.h"
 #include "nrf_drv_clock.h"
-#include "app_error.h"
 #include "nrf_delay.h"
 
-#define TASK_DELAY        1000           /**< Task delay. Delays a LED0 task for 200 ms */
-#define TIMER_PERIOD      2000          /**< Timer period. LED1 timer will expire after 1000 ms */
+#define TASK_DELAY        500          /** Task delay. Delays the task for x ms */
+#define TIMER_PERIOD      1000          /** Timer period. Timer will expire after x ms */
 
-TaskHandle_t  led_toggle_task_handle;   /**< Reference to LED0 toggling FreeRTOS task. */
-TimerHandle_t led_toggle_timer_handle;  /**< Reference to LED1 toggling FreeRTOS timer. */
+TaskHandle_t  task_handle;   /** Reference to FreeRTOS task. */
+TimerHandle_t timer_handle;  /** Reference to FreeRTOS timer. */
 
 static void led_toggle_task_function (void * pvParameter);
 static void led_toggle_timer_callback (void * pvParameter);
+static void start_error_mode(void);
 
 int main(void)
 {
-    ret_code_t err_code;
+    uint32_t err_code;
+
+    /* Configure LED-pins as outputs */
+    // nrf_dfu_trigger_usb_init();  // Initialise the USB DFU trigger library
+    // gpio_output_voltage_setup(); //  Increase GPIO voltage to 3.0 V in order to be able to use all LEDs
+    nrf_gpio_cfg_output(LED1_G); nrf_gpio_pin_write(LED1_G, 1); // Initialise LED1_G and turn led OFF
+    nrf_gpio_cfg_output(LED2_G); nrf_gpio_pin_write(LED2_G, 1); // Initialise LED2_G and turn led OFF
+    nrf_gpio_cfg_output(LED2_R); nrf_gpio_pin_write(LED2_R, 1); // Initialise LED2_R and turn led OFF
 
     /* Initialize clock driver for better time accuracy in FREERTOS */
     err_code = nrf_drv_clock_init();
-    APP_ERROR_CHECK(err_code);
-
-    /* Configure LED-pins as outputs */
-    bsp_board_init(BSP_INIT_LEDS);
+    //APP_ERROR_CHECK(err_code);
+    if (err_code != 0) {
+        start_error_mode();
+    }
 
     /* Create task for LED2 blinking with priority set to 2 */
     xTaskCreate(
@@ -48,18 +57,18 @@ int main(void)
         configMINIMAL_STACK_SIZE + 200,  // Stack size
         NULL,                            // Task Parameters
         2,                               // Task Priority
-        &led_toggle_task_handle          // Task Handle (by which the created task can be referenced)
+        &task_handle                     // Task Handle (by which the created task can be referenced)
     );
 
     /* Start timer for LED1 blinking */
-    led_toggle_timer_handle = xTimerCreate(
+    timer_handle = xTimerCreate(
         "LED1",                    // Timer Name
         TIMER_PERIOD,              // Timer Period in ticks
         pdTRUE,                    // Auto Reload
         NULL,                      // Timer ID
         led_toggle_timer_callback  // Timer Callback function
     );
-    xTimerStart(led_toggle_timer_handle, 0);
+    xTimerStart(timer_handle, 0);
 
     /* Activate deep sleep mode */
     SCB->SCR |= SCB_SCR_SLEEPDEEP_Msk;
@@ -67,15 +76,24 @@ int main(void)
     /* Start FreeRTOS scheduler. */
     vTaskStartScheduler();
 
+    
+    /* FreeRTOS won't get here unless there is insufficient RAM, 
+        * because it goes back to the start of stack in vTaskStartScheduler function.
+        * https://www.freertos.org/a00111.html */
+    /* If the program were to get here, start error mode */
+    start_error_mode();
+}
+
+
+/** Enter Error mode, which blinks the Red LED 
+ * 
+ */
+static void start_error_mode(void)
+{
     while (true)
     {
-        /* FreeRTOS won't get here unless there is insufficient RAM, 
-         * because it goes back to the start of stack in vTaskStartScheduler function.
-         * https://www.freertos.org/a00111.html */
-        /* If the program were to get here, blink the board's red LED */
-        bsp_board_led_invert(BSP_BOARD_LED_1);
+        nrf_gpio_pin_toggle(LED2_R);
         nrf_delay_ms(200);
-
     }
 }
 
@@ -88,7 +106,7 @@ static void led_toggle_task_function (void * pvParameter)
 {
     while (true)
     {
-        bsp_board_led_invert(BSP_BOARD_LED_0);
+        nrf_gpio_pin_toggle(LED1_G);
 
         /* Delay a task for a given number of ticks */
         vTaskDelay(TASK_DELAY);
@@ -103,5 +121,7 @@ static void led_toggle_task_function (void * pvParameter)
  */
 static void led_toggle_timer_callback (void * pvParameter)
 {
-    bsp_board_led_invert(BSP_BOARD_LED_2);
+    nrf_gpio_pin_toggle(LED2_G);
 }
+
+/** @} */
