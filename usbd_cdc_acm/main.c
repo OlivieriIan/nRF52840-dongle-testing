@@ -29,13 +29,17 @@
 
 #include "bsp.h"
 
-#define LED_USB_RESUME      (LED1_G)
-#define LED_CDC_ACM_OPEN    (LED2_G)
-#define LED_CDC_ACM_RX      (LED2_B)
-#define LED_CDC_ACM_TX      (LED2_R)
+#define LED_USB_RESUME      (LED2_R)
+#define LED_CDC_ACM_OPEN    (LED2_B)
+#define LED_CDC_ACM_RX      (LED2_G)
+#define LED_CDC_ACM_TX      (LED1_G)
+
+#define CONSOLE_NAME "\r\n\033[0;32musbd_cdc_acm:~$\033[0m "
 
 static void cdc_acm_user_ev_handler(app_usbd_class_inst_t const * p_inst,
                                     app_usbd_cdc_acm_user_event_t event);
+
+static void handle_cdc_event(void);
 
 
 /**
@@ -54,8 +58,16 @@ APP_USBD_CDC_ACM_GLOBAL_DEF(
 
 #define READ_SIZE 1
 
-static char m_rx_buffer[READ_SIZE];
-static char m_tx_buffer[NRFX_USBD_EPSIZE];
+static char g_rx_buffer[READ_SIZE];
+static char g_tx_buffer[NRFX_USBD_EPSIZE];
+static bool g_cdc_event_received = false;
+static app_usbd_cdc_acm_user_event_t g_cdc_event = 0;
+
+static void print_console_name(void)
+{
+    size_t size = sprintf(g_tx_buffer, CONSOLE_NAME);
+    app_usbd_cdc_acm_write(&m_app_cdc_acm, g_tx_buffer, size);
+}
 
 /**
  * @brief User defined CDC ACM event handler
@@ -63,18 +75,23 @@ static char m_tx_buffer[NRFX_USBD_EPSIZE];
 static void cdc_acm_user_ev_handler(app_usbd_class_inst_t const * p_inst,
                                     app_usbd_cdc_acm_user_event_t event)
 {
-    app_usbd_cdc_acm_t const * p_cdc_acm = app_usbd_cdc_acm_class_get(p_inst);
+    g_cdc_event_received = true;
+    g_cdc_event          = event;
+}
 
-    switch (event)
+static void handle_cdc_event(void)
+{
+    g_cdc_event_received = false;
+    switch (g_cdc_event)
     {
         case APP_USBD_CDC_ACM_USER_EVT_PORT_OPEN:
         {
             nrf_gpio_pin_clear(LED_CDC_ACM_OPEN); // Turn ON
 
             /*Setup first transfer*/
-            app_usbd_cdc_acm_read(&m_app_cdc_acm, m_rx_buffer, READ_SIZE);
-            size_t size = sprintf(m_tx_buffer, "USB Connected!\r\n");
-            app_usbd_cdc_acm_write(&m_app_cdc_acm, m_tx_buffer, size);
+            app_usbd_cdc_acm_read(&m_app_cdc_acm, g_rx_buffer, READ_SIZE);
+            size_t size = sprintf(g_tx_buffer, "USB Connected!\r\n\033[0;32musbd_cdc_acm:~$\033[0m ");
+            app_usbd_cdc_acm_write(&m_app_cdc_acm, g_tx_buffer, size);
             break;
         }
         case APP_USBD_CDC_ACM_USER_EVT_PORT_CLOSE:
@@ -89,12 +106,18 @@ static void cdc_acm_user_ev_handler(app_usbd_class_inst_t const * p_inst,
             ret_code_t ret = NRF_SUCCESS;
             do
             {
-                /*Get amount of data transfered*/
-                size_t size = app_usbd_cdc_acm_rx_size(p_cdc_acm);
-
                 /* Fetch data until internal buffer is empty */
-                ret = app_usbd_cdc_acm_read(&m_app_cdc_acm, m_rx_buffer, size);
-                app_usbd_cdc_acm_write(&m_app_cdc_acm, m_rx_buffer, size);
+                ret = app_usbd_cdc_acm_read(&m_app_cdc_acm, g_rx_buffer, READ_SIZE);
+                if(g_rx_buffer[0] == 0x0d) // New line received
+                {
+                    print_console_name();
+                }
+                else
+                {
+                    app_usbd_cdc_acm_write(&m_app_cdc_acm, g_rx_buffer, READ_SIZE);
+                }
+                
+                
             } while (ret == NRF_SUCCESS);
             break;
         }
@@ -183,8 +206,10 @@ int main(void)
     {
         while (app_usbd_event_queue_process()) { }/* Nothing to do */
 
-        /* Sleep CPU until an event is triggered */
-        __WFE();
+        if(g_cdc_event_received)
+        {
+            handle_cdc_event();
+        }
     }
 }
 
